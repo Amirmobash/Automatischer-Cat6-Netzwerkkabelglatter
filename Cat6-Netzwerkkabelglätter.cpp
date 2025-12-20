@@ -136,7 +136,7 @@ void drawHeader(const char* title){
 
   setTxt(2, TEXT_COLOR);
   tft.setCursor(10, 8);
-  tft.print("Amir");
+  tft.print("Automatischer Cat6-Netzwerkkabelglätter");
 
   setTxt(1, ORANGE_LIGHT);
   tft.setCursor(10, 28);
