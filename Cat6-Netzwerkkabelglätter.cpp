@@ -136,7 +136,7 @@ void drawHeader(const char* title){
 
   setTxt(2, TEXT_COLOR);
   tft.setCursor(10, 8);
-  tft.print("IGUS");
+  tft.print("Amir");
 
   setTxt(1, ORANGE_LIGHT);
   tft.setCursor(10, 28);
