@@ -2,11 +2,11 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_ILI9341.h>
 
-// ==================== TFT wiring (ESP32 VSPI) ====================
+// ==================== TFT-Verkabelung (ESP32 VSPI) ====================
 #define TFT_SCK   18
 #define TFT_MOSI  23
 #define TFT_MISO  19   // optional
-#define TFT_CS    15   // اگر جواب نداد 5 کن
+#define TFT_CS    15   // falls nicht funktioniert, auf 5 setzen
 #define TFT_DC     2
 #define TFT_RST    4
 Adafruit_ILI9341 tft(TFT_CS, TFT_DC, TFT_RST);
@@ -16,17 +16,17 @@ Adafruit_ILI9341 tft(TFT_CS, TFT_DC, TFT_RST);
 #define JOY_X   35
 #define JOY_SW  27
 
-#define PRESS_PIN 33   // ✅ ورودی ADC (بعد از تقسیم مقاومتی)
+#define PRESS_PIN 33   // ✅ ADC-Eingang (nach Spannungsteiler)
 
 #define RELAY_PIN 25
 #define RELAY_ON  LOW
 #define RELAY_OFF HIGH
 
-// ==================== Screen ====================
+// ==================== Bildschirm ====================
 #define SCREEN_W 240
 #define SCREEN_H 320
 
-// ==================== OLD palette (BGR numbers) -> swap R/B for Adafruit( RGB ) ====================
+// ==================== Alte Palette (BGR-Zahlen) -> R/B tauschen für Adafruit (RGB) ====================
 static inline uint16_t SWAP_RB(uint16_t c) {
   return (c & 0x07E0) | ((c & 0xF800) >> 11) | ((c & 0x001F) << 11);
 }
@@ -56,13 +56,13 @@ const int FOOTER_H  = 26;
 const int CONTENT_Y = HEADER_H + 6;
 const int CONTENT_H = SCREEN_H - HEADER_H - FOOTER_H - 12;
 
-// ==================== Menu ====================
-const char* menuItems[] = {" Sensor Mode", " Joystick Mode", " Auto Mode", " Druck Anzeige"};
+// ==================== Menue ====================
+const char* menuItems[] = {" Sensor-Modus", " Joystick-Modus", " Auto-Modus", " Druck Anzeige"};
 const uint8_t menuCount = sizeof(menuItems) / sizeof(menuItems[0]);
 uint8_t currentSelection = 0;
-int8_t activeMode = -1; // -1 = menu
+int8_t activeMode = -1; // -1 = Menue
 
-// ==================== Relay timing ====================
+// ==================== Relais-Zeitsteuerung ====================
 const uint16_t SENSOR_DURATION   = 10000;
 const uint16_t JOYSTICK_DURATION = 4000;
 const uint16_t AUTO_ON_TIME      = 5000;
@@ -71,7 +71,7 @@ const uint16_t AUTO_OFF_TIME     = 2000;
 bool relayActive = false;
 unsigned long relayTimer = 0;
 
-// ==================== Joystick filter ====================
+// ==================== Joystick-Filter ====================
 int centerX = 2048, centerY = 2048;
 float fx = 2048, fy = 2048;
 bool armedMenu = true;
@@ -82,46 +82,46 @@ const int THRESH   = 520;
 const float ALPHA  = 0.25f;
 unsigned long lastMove = 0;
 
-// ==================== Button click ====================
+// ==================== Tastenklick ====================
 unsigned long lastButtonPress = 0;
 unsigned long lastClickTime = 0;
 uint8_t buttonClickCount = 0;
 
-// ==================== Pressure sensor (Analog) ====================
-// این سنسورها معمولاً: 0.5V..4.5V متناظر با 0..MAX_PRESSURE_KPA هستند.
-const float VCC_SENSOR   = 5.00f;      // سنسور را با 5V تغذیه کردی
-const float VMIN_SENSOR  = 0.50f;      // ولتاژ در فشار صفر
-const float VMAX_SENSOR  = 4.50f;      // ولتاژ در فشار ماکس
+// ==================== Drucksensor (Analog) ====================
+// Diese Sensoren typischerweise: 0.5V..4.5V entsprechend 0..MAX_PRESSURE_KPA.
+const float VCC_SENSOR   = 5.00f;      // Sensor wird mit 5V versorgt
+const float VMIN_SENSOR  = 0.50f;      // Spannung bei Druck Null
+const float VMAX_SENSOR  = 4.50f;      // Spannung bei Maximaldruck
 
-// ✅ این را مطابق مدل سنسورت تنظیم کن (مثال‌ها):
-//  - اگر 0..1.0MPa  => 1000 kPa
-//  - اگر 0..0.7MPa  => 700 kPa
-//  - اگر 0..1.6MPa  => 1600 kPa
+// ✅ Hier an dein Sensormodell anpassen (Beispiele):
+//  - wenn 0..1.0MPa  => 1000 kPa
+//  - wenn 0..0.7MPa  => 700 kPa
+//  - wenn 0..1.6MPa  => 1600 kPa
 float MAX_PRESSURE_KPA = 700.0f;
 
-// تقسیم مقاومتی: 10k بالا + 20k پایین => Vadc = Vsensor * (20/(10+20)) = 0.6667
+// Spannungsteiler: 10k oben + 20k unten => Vadc = Vsensor * (20/(10+20)) = 0.6667
 const float DIV_RATIO = 20.0f / (10.0f + 20.0f);  // 0.6667
-// پس Vsensor = Vadc / DIV_RATIO
+// Also Vsensor = Vadc / DIV_RATIO
 
-// فیلتر فشار
+// Druckfilter
 float pressureKpa = -1.0f;
 float pressureFiltered = -1.0f;
 const float PRESS_ALPHA = 0.18f;
 
-// کالیبراسیون صفر (Offset) برای اینکه در هوای آزاد بشه ~0
+// Nullpunkt-Kalibrierung (Offset), damit in offener Luft ~0 angezeigt wird
 float zeroOffsetKpa = 0.0f;
 
-// OK Threshold قابل تنظیم (با چپ/راست در Pressure Mode)
-float okThresholdKpa = 2.0f;     // ✅ برای فوت کردن/کم‌فشار (کم و زیادش کن)
-const float OK_HYST = 0.5f;      // هیسترزیس برای جلوگیری از چشمک OK/NOT OK
+// OK-Schwellwert einstellbar (mit links/rechts im Druckmodus)
+float okThresholdKpa = 2.0f;     // ✅ Zum Anblasen/Niederdruck (nach Bedarf anpassen)
+const float OK_HYST = 0.5f;      // Hysterese gegen Flackern von OK/NICHT OK
 bool okLatched = false;
 
-// ==================== Auto mode ====================
+// ==================== Auto-Modus ====================
 bool autoState = false;
 bool autoFirst = true;
 unsigned long autoTimer = 0;
 
-// ==================== Utils ====================
+// ==================== Hilfsfunktionen ====================
 static inline int clampi(int v, int lo, int hi){ return v<lo?lo:(v>hi?hi:v); }
 static inline float clampf(float v, float lo, float hi){ return v<lo?lo:(v>hi?hi:v); }
 
@@ -142,7 +142,7 @@ void drawHeader(const char* title){
   tft.setCursor(10, 28);
   tft.print(title);
 
-  // relay dot
+  // Relais-Anzeigepunkt
   tft.fillRoundRect(SCREEN_W-40, 10, 30, 24, 10, PANEL_BG);
   tft.drawRoundRect(SCREEN_W-40, 10, 30, 24, 10, LINE_COLOR);
   tft.fillCircle(SCREEN_W-25, 22, 6, relayActive ? GREEN_COLOR : ORANGE_LIGHT);
@@ -171,10 +171,10 @@ void drawCard(int x,int y,int w,int h,bool sel){
 
 void drawMenuBase(){
   tft.fillScreen(ORANGE_BG);
-  drawHeader("Menu");
+  drawHeader("Menue");
   tft.fillRoundRect(10, CONTENT_Y, SCREEN_W-20, CONTENT_H, 14, PANEL_BG);
   tft.drawRoundRect(10, CONTENT_Y, SCREEN_W-20, CONTENT_H, 14, LINE_COLOR);
-  drawFooter("UP/DOWN | 1:Enter | 3:Back");
+  drawFooter("HOCH/RUNTER | 1:Bestaetigen | 3:Zurueck");
 }
 
 void drawMenuItem(uint8_t i, bool selected){
@@ -196,7 +196,7 @@ void drawMainMenu(){
   }
 }
 
-// ==================== Relay ====================
+// ==================== Relais ====================
 void activateRelay(uint16_t duration){
   digitalWrite(RELAY_PIN, RELAY_ON);
   relayActive = true;
@@ -232,7 +232,7 @@ void updateJoyFiltered(){
 int joyDX(){ return (int)fx - centerX; }
 int joyDY(){ return (int)fy - centerY; }
 
-// ✅ منو: بالا = منو بالا / پایین = منو پایین
+// ✅ Menue-Navigation: hoch = Menue hoch / runter = Menue runter
 void handleMainMenuNav(){
   int dx = joyDX();
   int dy = joyDY();
@@ -244,10 +244,10 @@ void handleMainMenuNav(){
   uint8_t oldSel = currentSelection;
 
   if (dy < -THRESH) {
-    // joystick UP -> menu UP
+    // Joystick HOCH -> Menue hoch
     currentSelection = (currentSelection==0)? (menuCount-1) : (currentSelection-1);
   } else if (dy > THRESH) {
-    // joystick DOWN -> menu DOWN
+    // Joystick RUNTER -> Menue runter
     currentSelection = (currentSelection+1) % menuCount;
   } else {
     return;
@@ -260,7 +260,7 @@ void handleMainMenuNav(){
   armedMenu = false;
 }
 
-// ==================== Button click & hold ====================
+// ==================== Tastenklick & Halten ====================
 bool buttonPressedEdge(){
   bool pressed = (digitalRead(JOY_SW) == LOW);
   if(!pressed) return false;
@@ -278,7 +278,7 @@ bool tripleClickNow(){
   return (buttonClickCount >= 3 && (millis() - lastClickTime) < 800);
 }
 
-// نگه داشتن دکمه برای کالیبراسیون صفر فشار (Pressure Mode)
+// Gedrueckt halten fuer Nullpunkt-Kalibrierung (Druckmodus)
 bool isButtonHeld(uint16_t msHold){
   static bool wasPressed = false;
   static unsigned long t0 = 0;
@@ -292,7 +292,7 @@ bool isButtonHeld(uint16_t msHold){
     wasPressed = false;
   }
   if (pressed && wasPressed && (millis() - t0) > msHold){
-    // یک بار تریگر
+    // einmal ausloesen
     while(digitalRead(JOY_SW)==LOW) delay(5);
     wasPressed = false;
     return true;
@@ -300,9 +300,9 @@ bool isButtonHeld(uint16_t msHold){
   return false;
 }
 
-// ==================== Pressure read (Analog) ====================
+// ==================== Druckmessung (Analog) ====================
 float readAdcVoltage(int pin){
-  // oversample average
+  // Oversampling / Mittelwert
   const int N = 40;
   long s = 0;
   for(int i=0;i<N;i++){
@@ -310,10 +310,10 @@ float readAdcVoltage(int pin){
     delayMicroseconds(120);
   }
   float adc = (float)s / (float)N;   // 0..4095
-  return (adc / 4095.0f) * 3.30f;    // ESP32 ADC reference ~3.3 (تقریب)
+  return (adc / 4095.0f) * 3.30f;    // ESP32 ADC Referenz ~3.3V (Näherung)
 }
 
-// تبدیل ولتاژ به kPa بر اساس 0.5..4.5V
+// Spannung in kPa umrechnen basierend auf 0.5..4.5V
 float voltageToKpa(float Vsensor){
   float x = (Vsensor - VMIN_SENSOR) / (VMAX_SENSOR - VMIN_SENSOR); // 0..1
   x = clampf(x, 0.0f, 1.0f);
@@ -322,18 +322,18 @@ float voltageToKpa(float Vsensor){
 
 float readPressureKpa(){
   float Vadc = readAdcVoltage(PRESS_PIN);
-  float Vsensor = Vadc / DIV_RATIO;             // برگرداندن تقسیم مقاومتی
+  float Vsensor = Vadc / DIV_RATIO;             // Spannungsteiler rueckgaengig machen
   float kpa = voltageToKpa(Vsensor);
-  return kpa - zeroOffsetKpa;                   // اعمال صفر کردن
+  return kpa - zeroOffsetKpa;                   // Nullpunkt anwenden
 }
 
 void calibratePressureZero(){
-  // چند ثانیه میانگین می‌گیریم
+  // Mittelwert ueber einige Sekunden
   tft.fillRect(14, CONTENT_Y+155, SCREEN_W-28, 36, ORANGE_ACCENT);
   tft.drawRoundRect(14, CONTENT_Y+155, SCREEN_W-28, 36, 10, ORANGE_LIGHT);
   setTxt(2, BLACK_COLOR);
   tft.setCursor(20, CONTENT_Y+167);
-  tft.print("Zero Cal...");
+  tft.print("Null kalibrieren...");
 
   const int N = 80;
   float sum = 0;
@@ -344,10 +344,10 @@ void calibratePressureZero(){
     delay(20);
   }
   float avg = sum / N;
-  zeroOffsetKpa = avg;  // حالا خروجی میشه avg-avg=0
+  zeroOffsetKpa = avg;  // Jetzt ist die Ausgabe avg-avg=0
 }
 
-// ==================== Mode UI ====================
+// ==================== Modus-Bildschirme ====================
 void splashMode(const char* name){
   tft.fillScreen(ORANGE_BG);
   drawHeader(name);
@@ -359,18 +359,18 @@ void splashMode(const char* name){
   delay(250);
 }
 
-// -------- Sensor Mode (اگر استفاده نمی‌کنی می‌تونی حذفش کنی) --------
-#define SENSOR_TRIG_PIN 32   // اگر سنسور نوری نداری آزاد بذار
+// -------- Sensor-Modus (falls nicht verwendet, kann er weggelassen werden) --------
+#define SENSOR_TRIG_PIN 32   // falls kein optischer Sensor, frei lassen
 void drawSensorModeUI(){
   tft.fillScreen(ORANGE_BG);
-  drawHeader("Sensor Mode");
+  drawHeader("Sensor-Modus");
   tft.fillRoundRect(14, CONTENT_Y, SCREEN_W-28, 170, 14, PANEL_BG);
   tft.drawRoundRect(14, CONTENT_Y, SCREEN_W-28, 170, 14, LINE_COLOR);
 
   setTxt(2, TEXT_COLOR);
   tft.setCursor(26, CONTENT_Y+40);
-  tft.print("Waiting signal");
-  drawFooter("3-Clicks Back");
+  tft.print("Warte auf Signal");
+  drawFooter("3x Klick zurueck");
 }
 void runSensorMode(){
   static bool shown = false;
@@ -383,7 +383,7 @@ void runSensorMode(){
     tft.drawRoundRect(18, CONTENT_Y+120, SCREEN_W-36, 44, 12, ORANGE_LIGHT);
     setTxt(2, BLACK_COLOR);
     tft.setCursor(52, CONTENT_Y+134);
-    tft.print("ACTIVATED!");
+    tft.print("AKTIVIERT!");
   }
 
   checkRelayTimer();
@@ -393,21 +393,21 @@ void runSensorMode(){
   }
 }
 
-// -------- Joystick Mode (هر حرکت از مرکز => فعال‌سازی) --------
+// -------- Joystick-Modus (jede Bewegung aus der Mitte => Aktivierung) --------
 const int JOY_TRIG_RADIUS = 700;
 void drawJoystickModeUI(){
   tft.fillScreen(ORANGE_BG);
-  drawHeader("Joystick Mode");
+  drawHeader("Joystick-Modus");
   tft.fillRoundRect(14, CONTENT_Y, SCREEN_W-28, 170, 14, PANEL_BG);
   tft.drawRoundRect(14, CONTENT_Y, SCREEN_W-28, 170, 14, LINE_COLOR);
 
   setTxt(2, TEXT_COLOR);
   tft.setCursor(30, CONTENT_Y+30);
-  tft.print("Move joystick");
+  tft.print("Bewege Joystick");
   tft.setCursor(30, CONTENT_Y+55);
-  tft.print("to activate");
+  tft.print("zum Aktivieren");
 
-  drawFooter("3-Clicks Back");
+  drawFooter("3x Klick zurueck");
 }
 void runJoystickMode(){
   static unsigned long lastTrig = 0;
@@ -431,7 +431,7 @@ void runJoystickMode(){
     tft.drawRoundRect(18, CONTENT_Y+120, SCREEN_W-36, 44, 12, ORANGE_LIGHT);
     setTxt(2, BLACK_COLOR);
     tft.setCursor(78, CONTENT_Y+134);
-    tft.print("ACTIVE!");
+    tft.print("AKTIV!");
   }
 
   checkRelayTimer();
@@ -441,23 +441,23 @@ void runJoystickMode(){
   }
 }
 
-// -------- Auto Mode --------
+// -------- Auto-Modus --------
 void drawAutoModeUI(){
   tft.fillScreen(ORANGE_BG);
-  drawHeader("Auto Mode");
+  drawHeader("Auto-Modus");
 
   tft.fillRoundRect(14, CONTENT_Y, SCREEN_W-28, 170, 14, PANEL_BG);
   tft.drawRoundRect(14, CONTENT_Y, SCREEN_W-28, 170, 14, LINE_COLOR);
 
   setTxt(2, TEXT_COLOR);
   tft.setCursor(44, CONTENT_Y+30);
-  tft.print("AUTO PULSE");
+  tft.print("AUTO-IMPULS");
 
   setTxt(1, TEXT_COLOR);
   tft.setCursor(52, CONTENT_Y+58);
-  tft.print("ON 5s / OFF 2s");
+  tft.print("EIN 5s / AUS 2s");
 
-  drawFooter("3-Clicks Back (only OFF)");
+  drawFooter("3x Klick zurueck (nur AUS)");
 }
 void runAutoMode(){
   if(autoFirst){
@@ -484,11 +484,11 @@ void runAutoMode(){
     tft.drawRoundRect(18, CONTENT_Y+95, SCREEN_W-36, 50, 14, ORANGE_LIGHT);
     setTxt(2, autoState ? BLACK_COLOR : ORANGE_LIGHT);
     tft.setCursor(62, CONTENT_Y+112);
-    tft.print(autoState ? "POWER ON" : "POWER OFF");
+    tft.print(autoState ? "EIN" : "AUS");
   }
 }
 
-// -------- Pressure Mode --------
+// -------- Druckmodus --------
 void drawPressureUI(){
   tft.fillScreen(ORANGE_BG);
   drawHeader("Druck Anzeige");
@@ -496,16 +496,16 @@ void drawPressureUI(){
   tft.fillRoundRect(14, CONTENT_Y, SCREEN_W-28, 210, 14, PANEL_BG);
   tft.drawRoundRect(14, CONTENT_Y, SCREEN_W-28, 210, 14, LINE_COLOR);
 
-  drawFooter("Hold=Zero | L/R=Thresh | 3=Back");
+  drawFooter("Halten=Null | L/R=Schwelle | 3=Zurueck");
 }
 
 void drawPressureGauge(){
-  // فقط داخل پنل پاک میشه (بدون چشمک کل صفحه)
+  // Nur das Panel loeschen (kein Flackern des ganzen Bildschirms)
   tft.fillRoundRect(18, CONTENT_Y+6, SCREEN_W-36, 198, 12, PANEL_BG);
 
   setTxt(2, TEXT_COLOR);
   tft.setCursor(24, CONTENT_Y+18);
-  tft.print("Pressure (kPa)");
+  tft.print("Druck (kPa)");
 
   setTxt(2, ORANGE_LIGHT);
   tft.setCursor(24, CONTENT_Y+48);
@@ -514,20 +514,20 @@ void drawPressureGauge(){
 
   setTxt(1, TEXT_COLOR);
   tft.setCursor(24, CONTENT_Y+78);
-  tft.print("ZeroOffset: ");
+  tft.print("Nulloffset: ");
   tft.print(zeroOffsetKpa, 1);
 
   tft.setCursor(24, CONTENT_Y+92);
-  tft.print("Threshold: ");
+  tft.print("Schwellwert: ");
   tft.print(okThresholdKpa, 1);
 
-  // latch with hysteresis
+  // Zustand mit Hysterese
   float p = pressureFiltered;
   if (p < (okThresholdKpa - OK_HYST)) okLatched = false;
   if (p > (okThresholdKpa + OK_HYST)) okLatched = true;
 
   uint16_t sc = okLatched ? GREEN_COLOR : RED_COLOR;
-  const char* s = okLatched ? "OK" : "NOT OK";
+  const char* s = okLatched ? "OK" : "NICHT OK";
 
   tft.fillRoundRect(18, CONTENT_Y+120, SCREEN_W-36, 44, 12, sc);
   tft.drawRoundRect(18, CONTENT_Y+120, SCREEN_W-36, 44, 12, ORANGE_LIGHT);
@@ -535,7 +535,7 @@ void drawPressureGauge(){
   tft.setCursor(80, CONTENT_Y+134);
   tft.print(s);
 
-  // bar visualization (0..max)
+  // Balkendiagramm (0..max)
   int barX = 24, barY = CONTENT_Y+175, barW = 192, barH = 14;
   tft.drawRect(barX, barY, barW, barH, LINE_COLOR);
   tft.fillRect(barX+1, barY+1, barW-2, barH-2, BLACK_COLOR);
@@ -550,20 +550,20 @@ void drawPressureGauge(){
 void runPressureMode(){
   static unsigned long lastUpdate = 0;
 
-  // چپ/راست برای تغییر threshold
+  // links/rechts zum Aendern des Schwellwerts
   int dx = joyDX();
   if (abs(dx) < DEADZONE) {
-    // nothing
+    // nichts tun
   } else {
     if (millis() - lastMove > 180) {
-      if (dx > THRESH) okThresholdKpa += 0.5f;      // right => threshold بیشتر
-      if (dx < -THRESH) okThresholdKpa -= 0.5f;     // left  => threshold کمتر
+      if (dx > THRESH) okThresholdKpa += 0.5f;      // rechts => Schwellwert erhoehen
+      if (dx < -THRESH) okThresholdKpa -= 0.5f;     // links  => Schwellwert verringern
       okThresholdKpa = clampf(okThresholdKpa, 0.0f, 200.0f);
       lastMove = millis();
     }
   }
 
-  // نگه داشتن دکمه = صفر کردن
+  // Gedrueckt halten = Nullpunkt kalibrieren
   if (isButtonHeld(1200)) {
     calibratePressureZero();
   }
@@ -585,7 +585,7 @@ void setup(){
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, RELAY_OFF);
 
-  pinMode(SENSOR_TRIG_PIN, INPUT);  // اگر استفاده نمی‌کنی هم مشکلی نیست
+  pinMode(SENSOR_TRIG_PIN, INPUT);  // falls nicht verwendet, egal
 
   // ADC
   analogReadResolution(12);
@@ -596,24 +596,24 @@ void setup(){
   // TFT
   SPI.begin(TFT_SCK, TFT_MISO, TFT_MOSI, TFT_CS);
   tft.begin();
-  tft.setRotation(2); // ✅ 180 درجه
+  tft.setRotation(2); // ✅ 180 Grad
 
-  // Calibrate joystick center
+  // Joystick-Mittenkalibrierung
   tft.fillScreen(BLACK_COLOR);
   tft.setTextColor(TEXT_COLOR);
   tft.setTextSize(2);
   tft.setCursor(10, 70);
-  tft.print("Calibrating...");
+  tft.print("Kalibriere...");
   tft.setTextSize(1);
   tft.setCursor(10, 98);
-  tft.print("Keep joystick centered!");
+  tft.print("Joystick in Mittelstellung halten!");
   calibrateJoyCenter();
 
-  // یک بار هم صفر فشار رو بگیر (اختیاری)
+  // Einmalige Drucknullpunkt-Kalibrierung (optional)
   tft.fillScreen(BLACK_COLOR);
   tft.setCursor(10, 70);
   tft.setTextSize(2);
-  tft.print("Zero pressure...");
+  tft.print("Druck nullen...");
   delay(300);
   calibratePressureZero();
 
