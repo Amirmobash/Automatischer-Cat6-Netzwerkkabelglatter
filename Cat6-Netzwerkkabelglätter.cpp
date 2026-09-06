@@ -1,663 +1,928 @@
+#include <Arduino.h>
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ILI9341.h>
 
-// ==================== TFT-Verkabelung (ESP32 VSPI) ====================
-#define TFT_SCK   18
-#define TFT_MOSI  23
-#define TFT_MISO  19   // optional
-#define TFT_CS    15   // falls nicht funktioniert, auf 5 setzen
-#define TFT_DC     2
-#define TFT_RST    4
+// ============================================================
+// Hardware configuration
+// ESP32 + ILI9341 + analog joystick + pressure sensor + relay
+// ============================================================
+
+constexpr uint8_t TFT_SCK  = 18;
+constexpr uint8_t TFT_MOSI = 23;
+constexpr uint8_t TFT_MISO = 19;
+constexpr uint8_t TFT_CS   = 15;  // If your board wiring uses GPIO 5, change only this constant.
+constexpr uint8_t TFT_DC   = 2;
+constexpr uint8_t TFT_RST  = 4;
+
+constexpr uint8_t JOY_Y  = 34;
+constexpr uint8_t JOY_X  = 35;
+constexpr uint8_t JOY_SW = 27;
+
+constexpr uint8_t PRESS_PIN       = 33;
+constexpr uint8_t SENSOR_TRIG_PIN = 32;
+constexpr uint8_t RELAY_PIN       = 25;
+
+constexpr uint8_t RELAY_ON  = LOW;   // Active-low relay module.
+constexpr uint8_t RELAY_OFF = HIGH;
+
 Adafruit_ILI9341 tft(TFT_CS, TFT_DC, TFT_RST);
 
-// ==================== Pins ====================
-#define JOY_Y   34
-#define JOY_X   35
-#define JOY_SW  27
+// ============================================================
+// Display configuration
+// ============================================================
 
-#define PRESS_PIN 33   // ✅ ADC-Eingang (nach Spannungsteiler)
+constexpr int16_t SCREEN_W = 240;
+constexpr int16_t SCREEN_H = 320;
+constexpr int16_t HEADER_H = 44;
+constexpr int16_t FOOTER_H = 26;
+constexpr int16_t CONTENT_Y = HEADER_H + 6;
+constexpr int16_t CONTENT_H = SCREEN_H - HEADER_H - FOOTER_H - 12;
 
-#define RELAY_PIN 25
-#define RELAY_ON  LOW
-#define RELAY_OFF HIGH
-
-// ==================== Bildschirm ====================
-#define SCREEN_W 240
-#define SCREEN_H 320
-
-// ==================== Alte Palette (BGR-Zahlen) -> R/B tauschen für Adafruit (RGB) ====================
-static inline uint16_t SWAP_RB(uint16_t c) {
-  return (c & 0x07E0) | ((c & 0xF800) >> 11) | ((c & 0x001F) << 11);
+static inline uint16_t swapRedBlue(uint16_t color) {
+  return (color & 0x07E0U) |
+         ((color & 0xF800U) >> 11U) |
+         ((color & 0x001FU) << 11U);
 }
-#define ORANGE_BG_B     0x003F
-#define ORANGE_DARK_B   0x02BF
-#define ORANGE_MAIN_B   0x02DF
-#define ORANGE_LIGHT_B  0x02FF
-#define ORANGE_ACCENT_B 0x04FF
-#define PANEL_BG_B      0x2104
 
-#define ORANGE_BG     SWAP_RB(ORANGE_BG_B)
-#define ORANGE_DARK   SWAP_RB(ORANGE_DARK_B)
-#define ORANGE_MAIN   SWAP_RB(ORANGE_MAIN_B)
-#define ORANGE_LIGHT  SWAP_RB(ORANGE_LIGHT_B)
-#define ORANGE_ACCENT SWAP_RB(ORANGE_ACCENT_B)
-#define PANEL_BG      SWAP_RB(PANEL_BG_B)
+constexpr uint16_t ORANGE_BG_B     = 0x003F;
+constexpr uint16_t ORANGE_DARK_B   = 0x02BF;
+constexpr uint16_t ORANGE_MAIN_B   = 0x02DF;
+constexpr uint16_t ORANGE_LIGHT_B  = 0x02FF;
+constexpr uint16_t ORANGE_ACCENT_B = 0x04FF;
+constexpr uint16_t PANEL_BG_B      = 0x2104;
 
-#define TEXT_COLOR    0xFFFF
-#define BLACK_COLOR   0x0000
-#define GREEN_COLOR   0x07E0
-#define RED_COLOR     0xF800
-#define LINE_COLOR    0x39E7
+const uint16_t ORANGE_BG     = swapRedBlue(ORANGE_BG_B);
+const uint16_t ORANGE_DARK   = swapRedBlue(ORANGE_DARK_B);
+const uint16_t ORANGE_MAIN   = swapRedBlue(ORANGE_MAIN_B);
+const uint16_t ORANGE_LIGHT  = swapRedBlue(ORANGE_LIGHT_B);
+const uint16_t ORANGE_ACCENT = swapRedBlue(ORANGE_ACCENT_B);
+const uint16_t PANEL_BG      = swapRedBlue(PANEL_BG_B);
 
-// ==================== Layout ====================
-const int HEADER_H  = 44;
-const int FOOTER_H  = 26;
-const int CONTENT_Y = HEADER_H + 6;
-const int CONTENT_H = SCREEN_H - HEADER_H - FOOTER_H - 12;
+constexpr uint16_t TEXT_COLOR  = 0xFFFF;
+constexpr uint16_t BLACK_COLOR = 0x0000;
+constexpr uint16_t GREEN_COLOR = 0x07E0;
+constexpr uint16_t RED_COLOR   = 0xF800;
+constexpr uint16_t LINE_COLOR  = 0x39E7;
 
-// ==================== Menue ====================
-const char* menuItems[] = {" Sensor-Modus", " Joystick-Modus", " Auto-Modus", " Druck Anzeige"};
-const uint8_t menuCount = sizeof(menuItems) / sizeof(menuItems[0]);
+// ============================================================
+// Application modes
+// ============================================================
+
+enum class Mode : int8_t {
+  Menu = -1,
+  Sensor = 0,
+  Joystick = 1,
+  Auto = 2,
+  Pressure = 3,
+};
+
+const char* const MENU_ITEMS[] = {
+  " Sensor-Modus",
+  " Joystick-Modus",
+  " Auto-Modus",
+  " Druck Anzeige",
+};
+
+constexpr uint8_t MENU_COUNT = sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]);
 uint8_t currentSelection = 0;
-int8_t activeMode = -1; // -1 = Menue
+Mode activeMode = Mode::Menu;
 
-// ==================== Relais-Zeitsteuerung ====================
-const uint16_t SENSOR_DURATION   = 10000;
-const uint16_t JOYSTICK_DURATION = 4000;
-const uint16_t AUTO_ON_TIME      = 5000;
-const uint16_t AUTO_OFF_TIME     = 2000;
+// ============================================================
+// Timing and control constants
+// ============================================================
+
+constexpr uint32_t SENSOR_DURATION_MS   = 10000UL;
+constexpr uint32_t JOYSTICK_DURATION_MS = 4000UL;
+constexpr uint32_t AUTO_ON_TIME_MS      = 5000UL;
+constexpr uint32_t AUTO_OFF_TIME_MS     = 2000UL;
+
+constexpr uint32_t BUTTON_DEBOUNCE_MS    = 30UL;
+constexpr uint32_t MULTI_CLICK_GAP_MS    = 550UL;
+constexpr uint32_t PRESS_LONG_HOLD_MS    = 1200UL;
+constexpr uint32_t MENU_MOVE_GUARD_MS    = 160UL;
+constexpr uint32_t THRESHOLD_STEP_MS     = 180UL;
+constexpr uint32_t PRESSURE_UI_PERIOD_MS = 180UL;
+
+static inline bool elapsedAtLeast(uint32_t now, uint32_t since, uint32_t interval) {
+  return static_cast<uint32_t>(now - since) >= interval;
+}
+
+static inline bool deadlineReached(uint32_t now, uint32_t deadline) {
+  return static_cast<int32_t>(now - deadline) >= 0;
+}
+
+static inline int clampInt(int value, int low, int high) {
+  return value < low ? low : (value > high ? high : value);
+}
+
+static inline float clampFloat(float value, float low, float high) {
+  return value < low ? low : (value > high ? high : value);
+}
+
+// ============================================================
+// Relay state
+// Timed relay control is intentionally separated from Auto mode.
+// This prevents a stale timed-relay deadline from switching Auto off.
+// ============================================================
 
 bool relayActive = false;
-unsigned long relayTimer = 0;
+bool timedRelayRunning = false;
+uint32_t timedRelayDeadline = 0;
+bool displayReady = false;
 
-// ==================== Joystick-Filter ====================
-int centerX = 2048, centerY = 2048;
-float fx = 2048, fy = 2048;
-bool armedMenu = true;
-bool armedJoy  = true;
+void drawRelayIndicator();
 
-const int DEADZONE = 220;
-const int THRESH   = 520;
-const float ALPHA  = 0.25f;
-unsigned long lastMove = 0;
+void setRelayOutput(bool on) {
+  relayActive = on;
+  digitalWrite(RELAY_PIN, on ? RELAY_ON : RELAY_OFF);
 
-// ==================== Tastenklick ====================
-unsigned long lastButtonPress = 0;
-unsigned long lastClickTime = 0;
-uint8_t buttonClickCount = 0;
-
-// ==================== Drucksensor (Analog) ====================
-// Diese Sensoren typischerweise: 0.5V..4.5V entsprechend 0..MAX_PRESSURE_KPA.
-const float VCC_SENSOR   = 5.00f;      // Sensor wird mit 5V versorgt
-const float VMIN_SENSOR  = 0.50f;      // Spannung bei Druck Null
-const float VMAX_SENSOR  = 4.50f;      // Spannung bei Maximaldruck
-
-// ✅ Hier an dein Sensormodell anpassen (Beispiele):
-//  - wenn 0..1.0MPa  => 1000 kPa
-//  - wenn 0..0.7MPa  => 700 kPa
-//  - wenn 0..1.6MPa  => 1600 kPa
-float MAX_PRESSURE_KPA = 700.0f;
-
-// Spannungsteiler: 10k oben + 20k unten => Vadc = Vsensor * (20/(10+20)) = 0.6667
-const float DIV_RATIO = 20.0f / (10.0f + 20.0f);  // 0.6667
-// Also Vsensor = Vadc / DIV_RATIO
-
-// Druckfilter
-float pressureKpa = -1.0f;
-float pressureFiltered = -1.0f;
-const float PRESS_ALPHA = 0.18f;
-
-// Nullpunkt-Kalibrierung (Offset), damit in offener Luft ~0 angezeigt wird
-float zeroOffsetKpa = 0.0f;
-
-// OK-Schwellwert einstellbar (mit links/rechts im Druckmodus)
-float okThresholdKpa = 2.0f;     // ✅ Zum Anblasen/Niederdruck (nach Bedarf anpassen)
-const float OK_HYST = 0.5f;      // Hysterese gegen Flackern von OK/NICHT OK
-bool okLatched = false;
-
-// ==================== Auto-Modus ====================
-bool autoState = false;
-bool autoFirst = true;
-unsigned long autoTimer = 0;
-
-// ==================== Hilfsfunktionen ====================
-static inline int clampi(int v, int lo, int hi){ return v<lo?lo:(v>hi?hi:v); }
-static inline float clampf(float v, float lo, float hi){ return v<lo?lo:(v>hi?hi:v); }
-
-void setTxt(uint8_t sz, uint16_t c) {
-  tft.setTextSize(sz);
-  tft.setTextColor(c);
+  if (displayReady) {
+    drawRelayIndicator();
+  }
 }
 
-void drawHeader(const char* title){
-  tft.fillRect(0, 0, SCREEN_W, HEADER_H, ORANGE_DARK);
-  tft.drawFastHLine(0, HEADER_H-1, SCREEN_W, LINE_COLOR);
-
-  setTxt(2, TEXT_COLOR);
-  tft.setCursor(10, 8);
-  tft.print("Automatischer Cat6-Netzwerkkabelglätter");
-
-  setTxt(1, ORANGE_LIGHT);
-  tft.setCursor(10, 28);
-  tft.print(title);
-
-  // Relais-Anzeigepunkt
-  tft.fillRoundRect(SCREEN_W-40, 10, 30, 24, 10, PANEL_BG);
-  tft.drawRoundRect(SCREEN_W-40, 10, 30, 24, 10, LINE_COLOR);
-  tft.fillCircle(SCREEN_W-25, 22, 6, relayActive ? GREEN_COLOR : ORANGE_LIGHT);
+void stopRelay() {
+  timedRelayRunning = false;
+  setRelayOutput(false);
 }
 
-void drawFooter(const char* text){
-  tft.fillRect(0, SCREEN_H-FOOTER_H, SCREEN_W, FOOTER_H, ORANGE_DARK);
-  tft.drawFastHLine(0, SCREEN_H-FOOTER_H, SCREEN_W, LINE_COLOR);
-  setTxt(1, TEXT_COLOR);
-  tft.setCursor(8, SCREEN_H-FOOTER_H+9);
+void startTimedRelay(uint32_t durationMs) {
+  timedRelayRunning = true;
+  timedRelayDeadline = millis() + durationMs;
+  setRelayOutput(true);
+}
+
+void serviceTimedRelay(uint32_t now) {
+  if (!timedRelayRunning) {
+    return;
+  }
+
+  if (deadlineReached(now, timedRelayDeadline)) {
+    timedRelayRunning = false;
+    setRelayOutput(false);
+  }
+}
+
+// ============================================================
+// Joystick state
+// ============================================================
+
+constexpr int JOY_DEFAULT_CENTER = 2048;
+constexpr int JOY_DEADZONE = 220;
+constexpr int JOY_THRESHOLD = 520;
+constexpr int JOY_TRIGGER_RADIUS = 700;
+constexpr float JOY_FILTER_ALPHA = 0.25f;
+
+int centerX = JOY_DEFAULT_CENTER;
+int centerY = JOY_DEFAULT_CENTER;
+float filteredJoyX = JOY_DEFAULT_CENTER;
+float filteredJoyY = JOY_DEFAULT_CENTER;
+
+bool menuArmed = true;
+bool joystickModeArmed = true;
+uint32_t lastMenuMoveAt = 0;
+uint32_t lastThresholdStepAt = 0;
+
+void calibrateJoystickCenter() {
+  constexpr int SAMPLE_COUNT = 250;
+  int64_t sumX = 0;
+  int64_t sumY = 0;
+
+  for (int i = 0; i < SAMPLE_COUNT; ++i) {
+    sumX += analogRead(JOY_X);
+    sumY += analogRead(JOY_Y);
+    delay(5);
+  }
+
+  centerX = static_cast<int>(sumX / SAMPLE_COUNT);
+  centerY = static_cast<int>(sumY / SAMPLE_COUNT);
+  filteredJoyX = static_cast<float>(centerX);
+  filteredJoyY = static_cast<float>(centerY);
+}
+
+void updateJoystickFilter() {
+  const int rawX = analogRead(JOY_X);
+  const int rawY = analogRead(JOY_Y);
+
+  filteredJoyX = filteredJoyX * (1.0f - JOY_FILTER_ALPHA) +
+                 static_cast<float>(rawX) * JOY_FILTER_ALPHA;
+  filteredJoyY = filteredJoyY * (1.0f - JOY_FILTER_ALPHA) +
+                 static_cast<float>(rawY) * JOY_FILTER_ALPHA;
+}
+
+int joystickDx() {
+  return static_cast<int>(filteredJoyX) - centerX;
+}
+
+int joystickDy() {
+  return static_cast<int>(filteredJoyY) - centerY;
+}
+
+// ============================================================
+// Button state machine
+// Uses real debounced state transitions instead of treating a held
+// button as repeated clicks.
+// ============================================================
+
+enum class ButtonEvent : uint8_t {
+  None,
+  Click,
+  TripleClick,
+  LongPress,
+};
+
+struct ButtonState {
+  bool rawPressed = false;
+  bool stablePressed = false;
+  bool longPressFired = false;
+  uint32_t rawChangedAt = 0;
+  uint32_t pressedAt = 0;
+  uint32_t lastClickAt = 0;
+  uint8_t clickCount = 0;
+};
+
+ButtonState button;
+
+void resetButtonClickSequence() {
+  button.clickCount = 0;
+  button.lastClickAt = 0;
+}
+
+ButtonEvent updateButton(uint32_t now, bool allowLongPress) {
+  const bool rawPressed = digitalRead(JOY_SW) == LOW;
+
+  if (rawPressed != button.rawPressed) {
+    button.rawPressed = rawPressed;
+    button.rawChangedAt = now;
+  }
+
+  if (button.rawPressed != button.stablePressed &&
+      elapsedAtLeast(now, button.rawChangedAt, BUTTON_DEBOUNCE_MS)) {
+    button.stablePressed = button.rawPressed;
+
+    if (button.stablePressed) {
+      button.pressedAt = now;
+      button.longPressFired = false;
+    } else {
+      if (!button.longPressFired) {
+        if (button.clickCount > 0 &&
+            elapsedAtLeast(now, button.lastClickAt, MULTI_CLICK_GAP_MS)) {
+          button.clickCount = 0;
+        }
+
+        ++button.clickCount;
+        button.lastClickAt = now;
+
+        if (button.clickCount >= 3) {
+          resetButtonClickSequence();
+          return ButtonEvent::TripleClick;
+        }
+
+        return ButtonEvent::Click;
+      }
+    }
+  }
+
+  if (allowLongPress &&
+      button.stablePressed &&
+      !button.longPressFired &&
+      elapsedAtLeast(now, button.pressedAt, PRESS_LONG_HOLD_MS)) {
+    button.longPressFired = true;
+    resetButtonClickSequence();
+    return ButtonEvent::LongPress;
+  }
+
+  if (!button.stablePressed &&
+      button.clickCount > 0 &&
+      elapsedAtLeast(now, button.lastClickAt, MULTI_CLICK_GAP_MS)) {
+    resetButtonClickSequence();
+  }
+
+  return ButtonEvent::None;
+}
+
+// ============================================================
+// Pressure sensor
+// Sensor assumption: 0.5 V ... 4.5 V maps to 0 ... MAX_PRESSURE_KPA.
+// Divider assumption: 10k high-side + 20k low-side => Vadc = Vsensor * 2/3.
+// ============================================================
+
+constexpr float SENSOR_MIN_VOLTAGE = 0.50f;
+constexpr float SENSOR_MAX_VOLTAGE = 4.50f;
+constexpr float MAX_PRESSURE_KPA = 700.0f;
+constexpr float DIVIDER_RATIO = 20.0f / 30.0f;
+constexpr float PRESSURE_FILTER_ALPHA = 0.18f;
+constexpr float OK_HYSTERESIS_KPA = 0.5f;
+
+float pressureKpa = 0.0f;
+float filteredPressureKpa = 0.0f;
+float pressureZeroOffsetKpa = 0.0f;
+float okThresholdKpa = 2.0f;
+bool pressureFilterInitialized = false;
+bool pressureOkLatched = false;
+
+float readAdcVoltage(uint8_t pin) {
+  // analogReadMilliVolts() uses the ESP32 ADC calibration path when supported
+  // by the installed Arduino-ESP32 core and is preferable to assuming 3.300 V.
+  constexpr uint8_t SAMPLE_COUNT = 32;
+  uint32_t sumMillivolts = 0;
+
+  for (uint8_t i = 0; i < SAMPLE_COUNT; ++i) {
+    sumMillivolts += static_cast<uint32_t>(analogReadMilliVolts(pin));
+    delayMicroseconds(120);
+  }
+
+  const float averageMillivolts =
+      static_cast<float>(sumMillivolts) / static_cast<float>(SAMPLE_COUNT);
+  return averageMillivolts / 1000.0f;
+}
+
+float sensorVoltageToKpa(float sensorVoltage) {
+  const float normalized = clampFloat(
+      (sensorVoltage - SENSOR_MIN_VOLTAGE) /
+          (SENSOR_MAX_VOLTAGE - SENSOR_MIN_VOLTAGE),
+      0.0f,
+      1.0f);
+
+  return normalized * MAX_PRESSURE_KPA;
+}
+
+float readUncalibratedPressureKpa() {
+  const float adcVoltage = readAdcVoltage(PRESS_PIN);
+  const float sensorVoltage = adcVoltage / DIVIDER_RATIO;
+  return sensorVoltageToKpa(sensorVoltage);
+}
+
+float readPressureKpa() {
+  // This sensor is treated as a positive-pressure sensor. Small negative values
+  // after zero calibration are therefore clamped to zero.
+  return max(0.0f, readUncalibratedPressureKpa() - pressureZeroOffsetKpa);
+}
+
+// ============================================================
+// Auto mode state
+// ============================================================
+
+bool autoRelayOn = false;
+uint32_t autoPhaseStartedAt = 0;
+
+// ============================================================
+// Sensor/joystick mode UI state
+// ============================================================
+
+bool sensorArmed = false;
+bool sensorShowingActive = false;
+bool joystickShowingActive = false;
+uint32_t joystickLastTriggerAt = 0;
+uint32_t pressureLastUpdateAt = 0;
+
+// ============================================================
+// Drawing helpers
+// ============================================================
+
+void setText(uint8_t size, uint16_t color) {
+  tft.setTextSize(size);
+  tft.setTextColor(color);
+}
+
+int16_t textWidth(const char* text, uint8_t size) {
+  return static_cast<int16_t>(strlen(text) * 6U * size);
+}
+
+void drawCenteredText(const char* text, int16_t y, uint8_t size, uint16_t color) {
+  setText(size, color);
+  const int16_t calculatedX = (SCREEN_W - textWidth(text, size)) / 2;
+  const int16_t x = calculatedX > 0 ? calculatedX : 0;
+  tft.setCursor(x, y);
   tft.print(text);
 }
 
-int itemY(uint8_t idx){
-  const int cardH = 40;
-  const int gap   = 10;
-  return CONTENT_Y + 12 + idx * (cardH + gap);
+void drawRelayIndicator() {
+  tft.fillRoundRect(SCREEN_W - 40, 10, 30, 24, 10, PANEL_BG);
+  tft.drawRoundRect(SCREEN_W - 40, 10, 30, 24, 10, LINE_COLOR);
+  tft.fillCircle(SCREEN_W - 25, 22, 6,
+                 relayActive ? GREEN_COLOR : ORANGE_LIGHT);
 }
 
-void drawCard(int x,int y,int w,int h,bool sel){
-  uint16_t fill = sel ? ORANGE_ACCENT : ORANGE_MAIN;
-  uint16_t bord = sel ? ORANGE_LIGHT  : LINE_COLOR;
-  tft.fillRoundRect(x, y, w, h, 10, fill);
-  tft.drawRoundRect(x, y, w, h, 10, bord);
+void drawHeader(const char* title) {
+  tft.fillRect(0, 0, SCREEN_W, HEADER_H, ORANGE_DARK);
+  tft.drawFastHLine(0, HEADER_H - 1, SCREEN_W, LINE_COLOR);
+
+  setText(2, TEXT_COLOR);
+  tft.setCursor(10, 6);
+  tft.print("CAT6 Glaetter");
+
+  setText(1, ORANGE_LIGHT);
+  tft.setCursor(10, 29);
+  tft.print(title);
+
+  drawRelayIndicator();
 }
 
-void drawMenuBase(){
+void drawFooter(const char* text) {
+  tft.fillRect(0, SCREEN_H - FOOTER_H, SCREEN_W, FOOTER_H, ORANGE_DARK);
+  tft.drawFastHLine(0, SCREEN_H - FOOTER_H, SCREEN_W, LINE_COLOR);
+  setText(1, TEXT_COLOR);
+  tft.setCursor(8, SCREEN_H - FOOTER_H + 9);
+  tft.print(text);
+}
+
+int16_t menuItemY(uint8_t index) {
+  constexpr int16_t CARD_H = 40;
+  constexpr int16_t GAP = 10;
+  return CONTENT_Y + 12 + index * (CARD_H + GAP);
+}
+
+void drawCard(int16_t x, int16_t y, int16_t width, int16_t height, bool selected) {
+  const uint16_t fill = selected ? ORANGE_ACCENT : ORANGE_MAIN;
+  const uint16_t border = selected ? ORANGE_LIGHT : LINE_COLOR;
+  tft.fillRoundRect(x, y, width, height, 10, fill);
+  tft.drawRoundRect(x, y, width, height, 10, border);
+}
+
+void drawMenuItem(uint8_t index, bool selected) {
+  constexpr int16_t X = 18;
+  constexpr int16_t WIDTH = SCREEN_W - 36;
+  constexpr int16_t HEIGHT = 40;
+  const int16_t y = menuItemY(index);
+
+  drawCard(X, y, WIDTH, HEIGHT, selected);
+  setText(2, selected ? BLACK_COLOR : TEXT_COLOR);
+  tft.setCursor(X + 10, y + 12);
+  tft.print(MENU_ITEMS[index]);
+}
+
+void drawMainMenu() {
   tft.fillScreen(ORANGE_BG);
   drawHeader("Menue");
-  tft.fillRoundRect(10, CONTENT_Y, SCREEN_W-20, CONTENT_H, 14, PANEL_BG);
-  tft.drawRoundRect(10, CONTENT_Y, SCREEN_W-20, CONTENT_H, 14, LINE_COLOR);
-  drawFooter("HOCH/RUNTER | 1:Bestaetigen | 3:Zurueck");
+  tft.fillRoundRect(10, CONTENT_Y, SCREEN_W - 20, CONTENT_H, 14, PANEL_BG);
+  tft.drawRoundRect(10, CONTENT_Y, SCREEN_W - 20, CONTENT_H, 14, LINE_COLOR);
+
+  for (uint8_t i = 0; i < MENU_COUNT; ++i) {
+    drawMenuItem(i, i == currentSelection);
+  }
+
+  drawFooter("Hoch/Runter | Klick=OK");
 }
 
-void drawMenuItem(uint8_t i, bool selected){
-  const int x = 18;
-  const int w = SCREEN_W - 36;
-  const int h = 40;
-  int y = itemY(i);
+void drawSensorModeUI() {
+  tft.fillScreen(ORANGE_BG);
+  drawHeader("Sensor-Modus");
+  tft.fillRoundRect(14, CONTENT_Y, SCREEN_W - 28, 170, 14, PANEL_BG);
+  tft.drawRoundRect(14, CONTENT_Y, SCREEN_W - 28, 170, 14, LINE_COLOR);
 
-  drawCard(x, y, w, h, selected);
-  setTxt(2, selected ? BLACK_COLOR : TEXT_COLOR);
-  tft.setCursor(x + 10, y + 12);
-  tft.print(menuItems[i]);
+  drawCenteredText("Warte auf Signal", CONTENT_Y + 40, 2, TEXT_COLOR);
+  drawFooter("3x Klick = zurueck");
 }
 
-void drawMainMenu(){
-  drawMenuBase();
-  for(uint8_t i=0;i<menuCount;i++){
-    drawMenuItem(i, i==currentSelection);
+void drawSensorActiveBadge() {
+  tft.fillRoundRect(18, CONTENT_Y + 120, SCREEN_W - 36, 44, 12, ORANGE_ACCENT);
+  tft.drawRoundRect(18, CONTENT_Y + 120, SCREEN_W - 36, 44, 12, ORANGE_LIGHT);
+  drawCenteredText("AKTIVIERT!", CONTENT_Y + 134, 2, BLACK_COLOR);
+}
+
+void drawJoystickModeUI() {
+  tft.fillScreen(ORANGE_BG);
+  drawHeader("Joystick-Modus");
+  tft.fillRoundRect(14, CONTENT_Y, SCREEN_W - 28, 170, 14, PANEL_BG);
+  tft.drawRoundRect(14, CONTENT_Y, SCREEN_W - 28, 170, 14, LINE_COLOR);
+
+  drawCenteredText("Bewege Joystick", CONTENT_Y + 30, 2, TEXT_COLOR);
+  drawCenteredText("zum Aktivieren", CONTENT_Y + 55, 2, TEXT_COLOR);
+  drawFooter("3x Klick = zurueck");
+}
+
+void drawJoystickActiveBadge() {
+  tft.fillRoundRect(18, CONTENT_Y + 120, SCREEN_W - 36, 44, 12, ORANGE_ACCENT);
+  tft.drawRoundRect(18, CONTENT_Y + 120, SCREEN_W - 36, 44, 12, ORANGE_LIGHT);
+  drawCenteredText("AKTIV!", CONTENT_Y + 134, 2, BLACK_COLOR);
+}
+
+void drawAutoModeUI() {
+  tft.fillScreen(ORANGE_BG);
+  drawHeader("Auto-Modus");
+  tft.fillRoundRect(14, CONTENT_Y, SCREEN_W - 28, 170, 14, PANEL_BG);
+  tft.drawRoundRect(14, CONTENT_Y, SCREEN_W - 28, 170, 14, LINE_COLOR);
+
+  drawCenteredText("AUTO-IMPULS", CONTENT_Y + 30, 2, TEXT_COLOR);
+  drawCenteredText("EIN 5s / AUS 2s", CONTENT_Y + 58, 1, TEXT_COLOR);
+  drawFooter("3x zurueck (nur AUS)");
+}
+
+void drawAutoStateBadge() {
+  const uint16_t badgeColor = autoRelayOn ? ORANGE_ACCENT : ORANGE_DARK;
+  const uint16_t textColor = autoRelayOn ? BLACK_COLOR : ORANGE_LIGHT;
+
+  tft.fillRoundRect(18, CONTENT_Y + 95, SCREEN_W - 36, 50, 14, badgeColor);
+  tft.drawRoundRect(18, CONTENT_Y + 95, SCREEN_W - 36, 50, 14, ORANGE_LIGHT);
+  drawCenteredText(autoRelayOn ? "EIN" : "AUS", CONTENT_Y + 112, 2, textColor);
+}
+
+void drawPressureUI() {
+  tft.fillScreen(ORANGE_BG);
+  drawHeader("Druck Anzeige");
+  tft.fillRoundRect(14, CONTENT_Y, SCREEN_W - 28, 210, 14, PANEL_BG);
+  tft.drawRoundRect(14, CONTENT_Y, SCREEN_W - 28, 210, 14, LINE_COLOR);
+  drawFooter("Halten=Null L/R=Limit 3x=Zurueck");
+}
+
+void updatePressureLatch(float pressure) {
+  if (pressure < okThresholdKpa - OK_HYSTERESIS_KPA) {
+    pressureOkLatched = false;
+  } else if (pressure > okThresholdKpa + OK_HYSTERESIS_KPA) {
+    pressureOkLatched = true;
   }
 }
 
-// ==================== Relais ====================
-void activateRelay(uint16_t duration){
-  digitalWrite(RELAY_PIN, RELAY_ON);
-  relayActive = true;
-  relayTimer = millis() + duration;
-}
-void checkRelayTimer(){
-  if(relayActive && (long)(millis() - relayTimer) >= 0){
-    digitalWrite(RELAY_PIN, RELAY_OFF);
-    relayActive = false;
+void drawPressureGauge() {
+  tft.fillRoundRect(18, CONTENT_Y + 6, SCREEN_W - 36, 198, 12, PANEL_BG);
+
+  setText(2, TEXT_COLOR);
+  tft.setCursor(24, CONTENT_Y + 18);
+  tft.print("Druck (kPa)");
+
+  setText(2, ORANGE_LIGHT);
+  tft.setCursor(24, CONTENT_Y + 48);
+  if (pressureFilterInitialized) {
+    tft.print(filteredPressureKpa, 2);
+    tft.print(" kPa");
+  } else {
+    tft.print("--.-- kPa");
+  }
+
+  setText(1, TEXT_COLOR);
+  tft.setCursor(24, CONTENT_Y + 78);
+  tft.print("Nulloffset: ");
+  tft.print(pressureZeroOffsetKpa, 1);
+
+  tft.setCursor(24, CONTENT_Y + 92);
+  tft.print("Schwellwert: ");
+  tft.print(okThresholdKpa, 1);
+
+  const float pressure = pressureFilterInitialized ? filteredPressureKpa : 0.0f;
+  updatePressureLatch(pressure);
+
+  const uint16_t statusColor = pressureOkLatched ? GREEN_COLOR : RED_COLOR;
+  const char* statusText = pressureOkLatched ? "OK" : "NICHT OK";
+
+  tft.fillRoundRect(18, CONTENT_Y + 120, SCREEN_W - 36, 44, 12, statusColor);
+  tft.drawRoundRect(18, CONTENT_Y + 120, SCREEN_W - 36, 44, 12, ORANGE_LIGHT);
+  drawCenteredText(statusText, CONTENT_Y + 134, 2, BLACK_COLOR);
+
+  constexpr int16_t BAR_X = 24;
+  constexpr int16_t BAR_Y = CONTENT_Y + 175;
+  constexpr int16_t BAR_W = 192;
+  constexpr int16_t BAR_H = 14;
+
+  tft.drawRect(BAR_X, BAR_Y, BAR_W, BAR_H, LINE_COLOR);
+  tft.fillRect(BAR_X + 1, BAR_Y + 1, BAR_W - 2, BAR_H - 2, BLACK_COLOR);
+
+  const float visualMax = clampFloat(max(okThresholdKpa * 2.0f, 20.0f),
+                                     20.0f,
+                                     400.0f);
+  const float clampedPressure = clampFloat(pressure, 0.0f, visualMax);
+  int fillWidth = static_cast<int>((clampedPressure / visualMax) * (BAR_W - 2));
+  fillWidth = clampInt(fillWidth, 0, BAR_W - 2);
+
+  if (fillWidth > 0) {
+    tft.fillRect(BAR_X + 1, BAR_Y + 1, fillWidth, BAR_H - 2, statusColor);
   }
 }
 
-// ==================== Joystick ====================
-void calibrateJoyCenter(){
-  long sx=0, sy=0;
-  const int N=250;
-  for(int i=0;i<N;i++){
-    sx += analogRead(JOY_X);
-    sy += analogRead(JOY_Y);
-    delay(5);
+void drawCalibrationMessage() {
+  tft.fillRoundRect(18, CONTENT_Y + 120, SCREEN_W - 36, 44, 12, ORANGE_ACCENT);
+  tft.drawRoundRect(18, CONTENT_Y + 120, SCREEN_W - 36, 44, 12, ORANGE_LIGHT);
+  drawCenteredText("Null kalibrieren", CONTENT_Y + 134, 1, BLACK_COLOR);
+}
+
+// ============================================================
+// Pressure calibration
+// ============================================================
+
+void calibratePressureZero(bool showUi) {
+  if (showUi && displayReady) {
+    drawCalibrationMessage();
   }
-  centerX = sx/N;
-  centerY = sy/N;
-  fx = centerX;
-  fy = centerY;
+
+  constexpr uint8_t CALIBRATION_SAMPLES = 60;
+  float sumKpa = 0.0f;
+
+  for (uint8_t i = 0; i < CALIBRATION_SAMPLES; ++i) {
+    sumKpa += readUncalibratedPressureKpa();
+    delay(20);
+  }
+
+  pressureZeroOffsetKpa = sumKpa / static_cast<float>(CALIBRATION_SAMPLES);
+  pressureKpa = 0.0f;
+  filteredPressureKpa = 0.0f;
+  pressureFilterInitialized = true;
+  pressureOkLatched = false;
+
+  Serial.print("Pressure zero offset: ");
+  Serial.print(pressureZeroOffsetKpa, 2);
+  Serial.println(" kPa");
 }
-void updateJoyFiltered(){
-  int rx = analogRead(JOY_X);
-  int ry = analogRead(JOY_Y);
-  fx = fx*(1.0f-ALPHA) + rx*ALPHA;
-  fy = fy*(1.0f-ALPHA) + ry*ALPHA;
+
+// ============================================================
+// Mode transitions
+// ============================================================
+
+void enterMode(Mode mode) {
+  activeMode = mode;
+  resetButtonClickSequence();
+
+  switch (mode) {
+    case Mode::Sensor:
+      stopRelay();
+      sensorShowingActive = false;
+      // If the input is already high on entry, wait until it returns low before
+      // accepting a new rising condition. This avoids immediate/repeated firing.
+      sensorArmed = digitalRead(SENSOR_TRIG_PIN) == LOW;
+      drawSensorModeUI();
+      break;
+
+    case Mode::Joystick:
+      stopRelay();
+      joystickModeArmed = true;
+      joystickShowingActive = false;
+      joystickLastTriggerAt = millis() - 500UL;
+      drawJoystickModeUI();
+      break;
+
+    case Mode::Auto:
+      stopRelay();
+      autoRelayOn = false;
+      autoPhaseStartedAt = millis();
+      drawAutoModeUI();
+      drawAutoStateBadge();
+      break;
+
+    case Mode::Pressure:
+      stopRelay();
+      lastThresholdStepAt = 0;
+      pressureLastUpdateAt = 0;
+      drawPressureUI();
+      drawPressureGauge();
+      break;
+
+    case Mode::Menu:
+      drawMainMenu();
+      break;
+  }
 }
-int joyDX(){ return (int)fx - centerX; }
-int joyDY(){ return (int)fy - centerY; }
 
-// ✅ Menue-Navigation: hoch = Menue hoch / runter = Menue runter
-void handleMainMenuNav(){
-  int dx = joyDX();
-  int dy = joyDY();
+void exitToMenu() {
+  stopRelay();
+  autoRelayOn = false;
+  activeMode = Mode::Menu;
+  resetButtonClickSequence();
+  drawMainMenu();
+}
 
-  if (abs(dx) < DEADZONE && abs(dy) < DEADZONE) armedMenu = true;
-  if (!armedMenu) return;
-  if (millis() - lastMove < 160) return;
+// ============================================================
+// Mode runners
+// ============================================================
 
-  uint8_t oldSel = currentSelection;
+void handleMainMenuNavigation(uint32_t now) {
+  const int dx = joystickDx();
+  const int dy = joystickDy();
 
-  if (dy < -THRESH) {
-    // Joystick HOCH -> Menue hoch
-    currentSelection = (currentSelection==0)? (menuCount-1) : (currentSelection-1);
-  } else if (dy > THRESH) {
-    // Joystick RUNTER -> Menue runter
-    currentSelection = (currentSelection+1) % menuCount;
+  if (abs(dx) < JOY_DEADZONE && abs(dy) < JOY_DEADZONE) {
+    menuArmed = true;
+  }
+
+  if (!menuArmed || !elapsedAtLeast(now, lastMenuMoveAt, MENU_MOVE_GUARD_MS)) {
+    return;
+  }
+
+  const uint8_t previous = currentSelection;
+
+  if (dy < -JOY_THRESHOLD) {
+    currentSelection = currentSelection == 0 ? MENU_COUNT - 1 : currentSelection - 1;
+  } else if (dy > JOY_THRESHOLD) {
+    currentSelection = (currentSelection + 1) % MENU_COUNT;
   } else {
     return;
   }
 
-  drawMenuItem(oldSel, false);
+  drawMenuItem(previous, false);
   drawMenuItem(currentSelection, true);
-
-  lastMove = millis();
-  armedMenu = false;
+  lastMenuMoveAt = now;
+  menuArmed = false;
 }
 
-// ==================== Tastenklick & Halten ====================
-bool buttonPressedEdge(){
-  bool pressed = (digitalRead(JOY_SW) == LOW);
-  if(!pressed) return false;
+void runSensorMode(uint32_t now) {
+  const bool sensorHigh = digitalRead(SENSOR_TRIG_PIN) == HIGH;
 
-  if(millis() - lastButtonPress > 220){
-    if(millis() - lastClickTime < 500) buttonClickCount++;
-    else buttonClickCount = 1;
-    lastClickTime = millis();
-    lastButtonPress = millis();
-    return true;
-  }
-  return false;
-}
-bool tripleClickNow(){
-  return (buttonClickCount >= 3 && (millis() - lastClickTime) < 800);
-}
-
-// Gedrueckt halten fuer Nullpunkt-Kalibrierung (Druckmodus)
-bool isButtonHeld(uint16_t msHold){
-  static bool wasPressed = false;
-  static unsigned long t0 = 0;
-
-  bool pressed = (digitalRead(JOY_SW) == LOW);
-  if (pressed && !wasPressed){
-    wasPressed = true;
-    t0 = millis();
-  }
-  if (!pressed && wasPressed){
-    wasPressed = false;
-  }
-  if (pressed && wasPressed && (millis() - t0) > msHold){
-    // einmal ausloesen
-    while(digitalRead(JOY_SW)==LOW) delay(5);
-    wasPressed = false;
-    return true;
-  }
-  return false;
-}
-
-// ==================== Druckmessung (Analog) ====================
-float readAdcVoltage(int pin){
-  // Oversampling / Mittelwert
-  const int N = 40;
-  long s = 0;
-  for(int i=0;i<N;i++){
-    s += analogRead(pin);
-    delayMicroseconds(120);
-  }
-  float adc = (float)s / (float)N;   // 0..4095
-  return (adc / 4095.0f) * 3.30f;    // ESP32 ADC Referenz ~3.3V (Näherung)
-}
-
-// Spannung in kPa umrechnen basierend auf 0.5..4.5V
-float voltageToKpa(float Vsensor){
-  float x = (Vsensor - VMIN_SENSOR) / (VMAX_SENSOR - VMIN_SENSOR); // 0..1
-  x = clampf(x, 0.0f, 1.0f);
-  return x * MAX_PRESSURE_KPA;
-}
-
-float readPressureKpa(){
-  float Vadc = readAdcVoltage(PRESS_PIN);
-  float Vsensor = Vadc / DIV_RATIO;             // Spannungsteiler rueckgaengig machen
-  float kpa = voltageToKpa(Vsensor);
-  return kpa - zeroOffsetKpa;                   // Nullpunkt anwenden
-}
-
-void calibratePressureZero(){
-  // Mittelwert ueber einige Sekunden
-  tft.fillRect(14, CONTENT_Y+155, SCREEN_W-28, 36, ORANGE_ACCENT);
-  tft.drawRoundRect(14, CONTENT_Y+155, SCREEN_W-28, 36, 10, ORANGE_LIGHT);
-  setTxt(2, BLACK_COLOR);
-  tft.setCursor(20, CONTENT_Y+167);
-  tft.print("Null kalibrieren...");
-
-  const int N = 80;
-  float sum = 0;
-  for(int i=0;i<N;i++){
-    float Vadc = readAdcVoltage(PRESS_PIN);
-    float Vsensor = Vadc / DIV_RATIO;
-    sum += voltageToKpa(Vsensor);
-    delay(20);
-  }
-  float avg = sum / N;
-  zeroOffsetKpa = avg;  // Jetzt ist die Ausgabe avg-avg=0
-}
-
-// ==================== Modus-Bildschirme ====================
-void splashMode(const char* name){
-  tft.fillScreen(ORANGE_BG);
-  drawHeader(name);
-  tft.fillRoundRect(18, CONTENT_Y+50, SCREEN_W-36, 80, 14, ORANGE_ACCENT);
-  tft.drawRoundRect(18, CONTENT_Y+50, SCREEN_W-36, 80, 14, ORANGE_LIGHT);
-  setTxt(2, BLACK_COLOR);
-  tft.setCursor(28, CONTENT_Y+82);
-  tft.print(name);
-  delay(250);
-}
-
-// -------- Sensor-Modus (falls nicht verwendet, kann er weggelassen werden) --------
-#define SENSOR_TRIG_PIN 32   // falls kein optischer Sensor, frei lassen
-void drawSensorModeUI(){
-  tft.fillScreen(ORANGE_BG);
-  drawHeader("Sensor-Modus");
-  tft.fillRoundRect(14, CONTENT_Y, SCREEN_W-28, 170, 14, PANEL_BG);
-  tft.drawRoundRect(14, CONTENT_Y, SCREEN_W-28, 170, 14, LINE_COLOR);
-
-  setTxt(2, TEXT_COLOR);
-  tft.setCursor(26, CONTENT_Y+40);
-  tft.print("Warte auf Signal");
-  drawFooter("3x Klick zurueck");
-}
-void runSensorMode(){
-  static bool shown = false;
-
-  if(digitalRead(SENSOR_TRIG_PIN) == HIGH && !relayActive){
-    activateRelay(SENSOR_DURATION);
-    shown = true;
-
-    tft.fillRoundRect(18, CONTENT_Y+120, SCREEN_W-36, 44, 12, ORANGE_ACCENT);
-    tft.drawRoundRect(18, CONTENT_Y+120, SCREEN_W-36, 44, 12, ORANGE_LIGHT);
-    setTxt(2, BLACK_COLOR);
-    tft.setCursor(52, CONTENT_Y+134);
-    tft.print("AKTIVIERT!");
+  if (!sensorHigh) {
+    sensorArmed = true;
   }
 
-  checkRelayTimer();
-  if(!relayActive && shown){
-    shown = false;
+  if (sensorHigh && sensorArmed && !timedRelayRunning) {
+    sensorArmed = false;
+    sensorShowingActive = true;
+    startTimedRelay(SENSOR_DURATION_MS);
+    drawSensorActiveBadge();
+  }
+
+  serviceTimedRelay(now);
+
+  if (!timedRelayRunning && sensorShowingActive) {
+    sensorShowingActive = false;
     drawSensorModeUI();
   }
 }
 
-// -------- Joystick-Modus (jede Bewegung aus der Mitte => Aktivierung) --------
-const int JOY_TRIG_RADIUS = 700;
-void drawJoystickModeUI(){
-  tft.fillScreen(ORANGE_BG);
-  drawHeader("Joystick-Modus");
-  tft.fillRoundRect(14, CONTENT_Y, SCREEN_W-28, 170, 14, PANEL_BG);
-  tft.drawRoundRect(14, CONTENT_Y, SCREEN_W-28, 170, 14, LINE_COLOR);
+void runJoystickMode(uint32_t now) {
+  const int dx = joystickDx();
+  const int dy = joystickDy();
 
-  setTxt(2, TEXT_COLOR);
-  tft.setCursor(30, CONTENT_Y+30);
-  tft.print("Bewege Joystick");
-  tft.setCursor(30, CONTENT_Y+55);
-  tft.print("zum Aktivieren");
-
-  drawFooter("3x Klick zurueck");
-}
-void runJoystickMode(){
-  static unsigned long lastTrig = 0;
-  static bool wasActive = false;
-
-  int dx = joyDX();
-  int dy = joyDY();
-
-  if (abs(dx) < DEADZONE && abs(dy) < DEADZONE) armedJoy = true;
-
-  long dist2 = (long)dx*dx + (long)dy*dy;
-  long r2 = (long)JOY_TRIG_RADIUS * JOY_TRIG_RADIUS;
-
-  if(armedJoy && !relayActive && millis()-lastTrig > 500 && dist2 > r2){
-    activateRelay(JOYSTICK_DURATION);
-    lastTrig = millis();
-    wasActive = true;
-    armedJoy = false;
-
-    tft.fillRoundRect(18, CONTENT_Y+120, SCREEN_W-36, 44, 12, ORANGE_ACCENT);
-    tft.drawRoundRect(18, CONTENT_Y+120, SCREEN_W-36, 44, 12, ORANGE_LIGHT);
-    setTxt(2, BLACK_COLOR);
-    tft.setCursor(78, CONTENT_Y+134);
-    tft.print("AKTIV!");
+  if (abs(dx) < JOY_DEADZONE && abs(dy) < JOY_DEADZONE) {
+    joystickModeArmed = true;
   }
 
-  checkRelayTimer();
-  if(!relayActive && wasActive){
-    wasActive = false;
+  const int64_t distanceSquared =
+      static_cast<int64_t>(dx) * dx + static_cast<int64_t>(dy) * dy;
+  constexpr int64_t TRIGGER_RADIUS_SQUARED =
+      static_cast<int64_t>(JOY_TRIGGER_RADIUS) * JOY_TRIGGER_RADIUS;
+
+  if (joystickModeArmed &&
+      !timedRelayRunning &&
+      elapsedAtLeast(now, joystickLastTriggerAt, 500UL) &&
+      distanceSquared > TRIGGER_RADIUS_SQUARED) {
+    joystickModeArmed = false;
+    joystickShowingActive = true;
+    joystickLastTriggerAt = now;
+    startTimedRelay(JOYSTICK_DURATION_MS);
+    drawJoystickActiveBadge();
+  }
+
+  serviceTimedRelay(now);
+
+  if (!timedRelayRunning && joystickShowingActive) {
+    joystickShowingActive = false;
     drawJoystickModeUI();
   }
 }
 
-// -------- Auto-Modus --------
-void drawAutoModeUI(){
-  tft.fillScreen(ORANGE_BG);
-  drawHeader("Auto-Modus");
+void runAutoMode(uint32_t now) {
+  const uint32_t interval = autoRelayOn ? AUTO_ON_TIME_MS : AUTO_OFF_TIME_MS;
 
-  tft.fillRoundRect(14, CONTENT_Y, SCREEN_W-28, 170, 14, PANEL_BG);
-  tft.drawRoundRect(14, CONTENT_Y, SCREEN_W-28, 170, 14, LINE_COLOR);
-
-  setTxt(2, TEXT_COLOR);
-  tft.setCursor(44, CONTENT_Y+30);
-  tft.print("AUTO-IMPULS");
-
-  setTxt(1, TEXT_COLOR);
-  tft.setCursor(52, CONTENT_Y+58);
-  tft.print("EIN 5s / AUS 2s");
-
-  drawFooter("3x Klick zurueck (nur AUS)");
-}
-void runAutoMode(){
-  if(autoFirst){
-    autoFirst = false;
-    autoState = false;
-    relayActive = false;
-    digitalWrite(RELAY_PIN, RELAY_OFF);
-    autoTimer = millis();
-    drawAutoModeUI();
+  if (!elapsedAtLeast(now, autoPhaseStartedAt, interval)) {
+    return;
   }
 
-  unsigned long now = millis();
-  uint16_t interval = autoState ? AUTO_ON_TIME : AUTO_OFF_TIME;
-
-  if(now - autoTimer >= interval){
-    autoState = !autoState;
-    autoTimer = now;
-
-    digitalWrite(RELAY_PIN, autoState ? RELAY_ON : RELAY_OFF);
-    relayActive = autoState;
-
-    uint16_t badge = autoState ? ORANGE_ACCENT : ORANGE_DARK;
-    tft.fillRoundRect(18, CONTENT_Y+95, SCREEN_W-36, 50, 14, badge);
-    tft.drawRoundRect(18, CONTENT_Y+95, SCREEN_W-36, 50, 14, ORANGE_LIGHT);
-    setTxt(2, autoState ? BLACK_COLOR : ORANGE_LIGHT);
-    tft.setCursor(62, CONTENT_Y+112);
-    tft.print(autoState ? "EIN" : "AUS");
-  }
+  autoRelayOn = !autoRelayOn;
+  autoPhaseStartedAt = now;
+  timedRelayRunning = false;
+  setRelayOutput(autoRelayOn);
+  drawAutoStateBadge();
 }
 
-// -------- Druckmodus --------
-void drawPressureUI(){
-  tft.fillScreen(ORANGE_BG);
-  drawHeader("Druck Anzeige");
+void runPressureMode(uint32_t now) {
+  const int dx = joystickDx();
 
-  tft.fillRoundRect(14, CONTENT_Y, SCREEN_W-28, 210, 14, PANEL_BG);
-  tft.drawRoundRect(14, CONTENT_Y, SCREEN_W-28, 210, 14, LINE_COLOR);
+  if (elapsedAtLeast(now, lastThresholdStepAt, THRESHOLD_STEP_MS)) {
+    bool changed = false;
 
-  drawFooter("Halten=Null | L/R=Schwelle | 3=Zurueck");
-}
+    if (dx > JOY_THRESHOLD) {
+      okThresholdKpa += 0.5f;
+      changed = true;
+    } else if (dx < -JOY_THRESHOLD) {
+      okThresholdKpa -= 0.5f;
+      changed = true;
+    }
 
-void drawPressureGauge(){
-  // Nur das Panel loeschen (kein Flackern des ganzen Bildschirms)
-  tft.fillRoundRect(18, CONTENT_Y+6, SCREEN_W-36, 198, 12, PANEL_BG);
-
-  setTxt(2, TEXT_COLOR);
-  tft.setCursor(24, CONTENT_Y+18);
-  tft.print("Druck (kPa)");
-
-  setTxt(2, ORANGE_LIGHT);
-  tft.setCursor(24, CONTENT_Y+48);
-  tft.print(pressureFiltered, 2);
-  tft.print(" kPa");
-
-  setTxt(1, TEXT_COLOR);
-  tft.setCursor(24, CONTENT_Y+78);
-  tft.print("Nulloffset: ");
-  tft.print(zeroOffsetKpa, 1);
-
-  tft.setCursor(24, CONTENT_Y+92);
-  tft.print("Schwellwert: ");
-  tft.print(okThresholdKpa, 1);
-
-  // Zustand mit Hysterese
-  float p = pressureFiltered;
-  if (p < (okThresholdKpa - OK_HYST)) okLatched = false;
-  if (p > (okThresholdKpa + OK_HYST)) okLatched = true;
-
-  uint16_t sc = okLatched ? GREEN_COLOR : RED_COLOR;
-  const char* s = okLatched ? "OK" : "NICHT OK";
-
-  tft.fillRoundRect(18, CONTENT_Y+120, SCREEN_W-36, 44, 12, sc);
-  tft.drawRoundRect(18, CONTENT_Y+120, SCREEN_W-36, 44, 12, ORANGE_LIGHT);
-  setTxt(2, BLACK_COLOR);
-  tft.setCursor(80, CONTENT_Y+134);
-  tft.print(s);
-
-  // Balkendiagramm (0..max)
-  int barX = 24, barY = CONTENT_Y+175, barW = 192, barH = 14;
-  tft.drawRect(barX, barY, barW, barH, LINE_COLOR);
-  tft.fillRect(barX+1, barY+1, barW-2, barH-2, BLACK_COLOR);
-
-  float visMax = clampf(max(okThresholdKpa*2.0f, 20.0f), 20.0f, 400.0f);
-  float cp = clampf(p, 0.0f, visMax);
-  int fw = (int)((cp/visMax)*(barW-2));
-  fw = clampi(fw, 0, barW-2);
-  tft.fillRect(barX+1, barY+1, fw, barH-2, sc);
-}
-
-void runPressureMode(){
-  static unsigned long lastUpdate = 0;
-
-  // links/rechts zum Aendern des Schwellwerts
-  int dx = joyDX();
-  if (abs(dx) < DEADZONE) {
-    // nichts tun
-  } else {
-    if (millis() - lastMove > 180) {
-      if (dx > THRESH) okThresholdKpa += 0.5f;      // rechts => Schwellwert erhoehen
-      if (dx < -THRESH) okThresholdKpa -= 0.5f;     // links  => Schwellwert verringern
-      okThresholdKpa = clampf(okThresholdKpa, 0.0f, 200.0f);
-      lastMove = millis();
+    if (changed) {
+      okThresholdKpa = clampFloat(okThresholdKpa, 0.0f, 200.0f);
+      lastThresholdStepAt = now;
+      drawPressureGauge();
     }
   }
 
-  // Gedrueckt halten = Nullpunkt kalibrieren
-  if (isButtonHeld(1200)) {
-    calibratePressureZero();
+  if (!elapsedAtLeast(now, pressureLastUpdateAt, PRESSURE_UI_PERIOD_MS)) {
+    return;
   }
 
-  if (millis() - lastUpdate > 180){
-    pressureKpa = readPressureKpa();
-    if (pressureFiltered < 0) pressureFiltered = pressureKpa;
-    pressureFiltered = pressureFiltered*(1.0f-PRESS_ALPHA) + pressureKpa*PRESS_ALPHA;
-    drawPressureGauge();
-    lastUpdate = millis();
+  pressureKpa = readPressureKpa();
+
+  if (!pressureFilterInitialized) {
+    filteredPressureKpa = pressureKpa;
+    pressureFilterInitialized = true;
+  } else {
+    filteredPressureKpa =
+        filteredPressureKpa * (1.0f - PRESSURE_FILTER_ALPHA) +
+        pressureKpa * PRESSURE_FILTER_ALPHA;
   }
+
+  drawPressureGauge();
+  pressureLastUpdateAt = now;
 }
 
-// ==================== Setup / Loop ====================
-void setup(){
+// ============================================================
+// Setup / loop
+// ============================================================
+
+void setup() {
   Serial.begin(115200);
 
   pinMode(JOY_SW, INPUT_PULLUP);
+
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, RELAY_OFF);
+  relayActive = false;
+  timedRelayRunning = false;
 
-  pinMode(SENSOR_TRIG_PIN, INPUT);  // falls nicht verwendet, egal
+  // Active-high trigger. INPUT_PULLDOWN prevents a disconnected input from
+  // floating high and unexpectedly energizing the relay.
+  pinMode(SENSOR_TRIG_PIN, INPUT_PULLDOWN);
 
-  // ADC
   analogReadResolution(12);
   analogSetPinAttenuation(JOY_X, ADC_11db);
   analogSetPinAttenuation(JOY_Y, ADC_11db);
   analogSetPinAttenuation(PRESS_PIN, ADC_11db);
 
-  // TFT
   SPI.begin(TFT_SCK, TFT_MISO, TFT_MOSI, TFT_CS);
   tft.begin();
-  tft.setRotation(2); // ✅ 180 Grad
+  tft.setRotation(2);
+  displayReady = true;
 
-  // Joystick-Mittenkalibrierung
   tft.fillScreen(BLACK_COLOR);
-  tft.setTextColor(TEXT_COLOR);
-  tft.setTextSize(2);
+  setText(2, TEXT_COLOR);
   tft.setCursor(10, 70);
   tft.print("Kalibriere...");
-  tft.setTextSize(1);
+  setText(1, TEXT_COLOR);
   tft.setCursor(10, 98);
-  tft.print("Joystick in Mittelstellung halten!");
-  calibrateJoyCenter();
+  tft.print("Joystick mittig halten!");
+  calibrateJoystickCenter();
 
-  // Einmalige Drucknullpunkt-Kalibrierung (optional)
   tft.fillScreen(BLACK_COLOR);
+  setText(2, TEXT_COLOR);
   tft.setCursor(10, 70);
-  tft.setTextSize(2);
   tft.print("Druck nullen...");
-  delay(300);
-  calibratePressureZero();
+  setText(1, TEXT_COLOR);
+  tft.setCursor(10, 98);
+  tft.print("Sensor druckfrei lassen");
+  delay(250);
+  calibratePressureZero(false);
 
+  Serial.println("CAT6 cable straightener ready.");
   drawMainMenu();
 }
 
-void loop(){
-  updateJoyFiltered();
+void loop() {
+  const uint32_t now = millis();
+  updateJoystickFilter();
 
-  if(buttonPressedEdge()){
-    if(activeMode == -1){
-      if(buttonClickCount == 1){
-        activeMode = currentSelection;
-        splashMode(menuItems[currentSelection]);
+  const bool allowLongPress = activeMode == Mode::Pressure;
+  const ButtonEvent buttonEvent = updateButton(now, allowLongPress);
 
-        if(activeMode == 0) drawSensorModeUI();
-        if(activeMode == 1) { armedJoy = true; drawJoystickModeUI(); }
-        if(activeMode == 2) { autoFirst = true; drawAutoModeUI(); }
-        if(activeMode == 3) { drawPressureUI(); drawPressureGauge(); }
-      }
-    } else {
-      if(tripleClickNow()){
-        if(activeMode != 2 || !relayActive){
-          digitalWrite(RELAY_PIN, RELAY_OFF);
-          relayActive = false;
-          activeMode = -1;
-          buttonClickCount = 0;
-          drawMainMenu();
-          return;
-        }
-      }
+  if (activeMode == Mode::Menu) {
+    if (buttonEvent == ButtonEvent::Click) {
+      enterMode(static_cast<Mode>(currentSelection));
+      return;
+    }
+
+    handleMainMenuNavigation(now);
+    return;
+  }
+
+  if (buttonEvent == ButtonEvent::TripleClick) {
+    // Preserve the original safety rule: Auto mode may only be left while
+    // the relay is OFF. Other modes are stopped immediately on exit.
+    if (activeMode != Mode::Auto || !relayActive) {
+      exitToMenu();
+      return;
     }
   }
 
-  if(activeMode == -1){
-    handleMainMenuNav();
-  } else {
-    switch(activeMode){
-      case 0: runSensorMode();   break;
-      case 1: runJoystickMode(); break;
-      case 2: runAutoMode();     break;
-      case 3: runPressureMode(); break;
-    }
+  if (activeMode == Mode::Pressure && buttonEvent == ButtonEvent::LongPress) {
+    calibratePressureZero(true);
+    drawPressureUI();
+    drawPressureGauge();
+    pressureLastUpdateAt = millis();
+    return;
   }
 
-  checkRelayTimer();
+  switch (activeMode) {
+    case Mode::Sensor:
+      runSensorMode(now);
+      break;
+
+    case Mode::Joystick:
+      runJoystickMode(now);
+      break;
+
+    case Mode::Auto:
+      runAutoMode(now);
+      break;
+
+    case Mode::Pressure:
+      runPressureMode(now);
+      break;
+
+    case Mode::Menu:
+      break;
+  }
 }
