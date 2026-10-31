@@ -57,3 +57,7 @@ To build in Arduino IDE, use an empty matching `.ino` wrapper and keep this sour
 No physical testing, new hardware photographs or measured electrical/optical
 performance is claimed. Retain the author attribution and existing license/source
 notices when reusing the project.
+
+## License
+
+The original project documentation publishes this project under the **MIT License**. Retain the existing source notices.
