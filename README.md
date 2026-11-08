@@ -1,9 +1,9 @@
 # Automatischer Cat6-Netzwerkkabelglätter
 
 Ein ESP32‑gesteuertes Gerät zum automatischen Richten von Cat6‑Netzwerkkabeln mittels pneumatischem Druck. Die Steuerung erfolgt über ein Farb‑TFT‑Display (ILI9341) und einen Joystick. Das Herzstück ist ein Relais, das eine Druckluft‑ oder Hydraulikvorrichtung ansteuert.
-[
-[[![Aufbau]([https://via.placeholder.com/800x400?text=Bild+folgt](https://github.com/Amirmobash/Automatischer-Cat6-Netzwerkkabelglatter/blob/main/amir%20AC_U_.jpg?raw=true))](https://github.com/Amirmobash/Automatischer-Cat6-Netzwerkkabelglatter/blob/main/amir%20AC_U_.jpg?raw=true)](https://raw.githubusercontent.com/Amirmobash/Automatischer-Cat6-Netzwerkkabelglatter/refs/heads/main/amir%20AC_U_.jpg)  ](https://raw.githubusercontent.com/Amirmobash/Automatischer-Cat6-Netzwerkkabelglatter/refs/heads/main/amir%20AC_U_.jpg)
-*Platzhalter für ein Foto des Aufbaus*
+
+<p align="center"><img src="amir%20AC_U_.jpg" alt="Projektabbildung des automatischen Cat6 Netzwerkkabelglätters mit ESP32-Steuerung, TFT und Joystick" width="850"></p>
+<p align="center"><sub>Amir Mobasheraghdam</sub></p>
 
 ---
 
